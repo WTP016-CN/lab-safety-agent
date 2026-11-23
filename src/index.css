@@ -311,6 +311,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .key-input { display: flex; align-items: center; gap: 8px; border: 1px solid #d7e1dc; background: #fbfcfb; border-radius: 8px; padding: 0 10px; color: #84958c; }
 .key-input input { border: 0; padding-left: 0; background: transparent; }
 .key-input button { border: 0; background: none; color: #71877c; padding: 5px; }
+.models-refresh { display: inline-flex; align-items: center; gap: 4px; border: 0; background: none; color: var(--teal); font-size: 10px; font-weight: 600; margin-left: auto; }
+.models-refresh:hover:not(:disabled) { opacity: .8; }
+.models-status.success { color: #15803d; }
+.models-status.error { color: #b91c1c; }
+.models-status.loading { color: var(--teal); }
 .settings-note { background: #fff9ec; color: #93703d; border-radius: 7px; padding: 11px; font-size: 10px; line-height: 1.7; }
 .modal-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 21px; }
 .text-button { border: 0; background: none; display: flex; align-items: center; gap: 5px; color: #87978f; font-size: 10px; }

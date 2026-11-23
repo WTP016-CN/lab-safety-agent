@@ -57,6 +57,11 @@ interface ChatCompletionResponse {
   error?: { message?: string };
 }
 
+interface ModelsResponse {
+  data?: Array<{ id?: string }>;
+  error?: { message?: string };
+}
+
 export interface LlmClientOptions {
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
@@ -70,6 +75,15 @@ export function resolveChatCompletionsUrl(baseUrl: string): string {
   }
   if (/\/chat\/completions$/i.test(base)) return base;
   return `${base}/chat/completions`;
+}
+
+export function resolveModelsUrl(baseUrl: string): string {
+  const base = baseUrl.trim().replace(/\/+$/, '');
+  if (!base) {
+    throw new LlmRequestError('auth', '请先填写 API 地址。', false);
+  }
+  if (/\/chat\/completions$/i.test(base)) return base.replace(/\/chat\/completions$/i, '/models');
+  return `${base}/models`;
 }
 
 function contentAsText(data: ChatCompletionResponse): string {
@@ -260,4 +274,59 @@ export class LlmEngine implements AgentEngine {
 
 export function createLlmEngine(settings: ModelSettings, options?: LlmClientOptions): LlmEngine {
   return new LlmEngine(settings, options);
+}
+
+export async function fetchModelIds(
+  settings: Pick<ModelSettings, 'baseUrl' | 'apiKey'>,
+  options: { timeoutMs?: number; fetchImpl?: typeof fetch } = {},
+): Promise<string[]> {
+  const baseUrl = settings.baseUrl.trim();
+  const apiKey = settings.apiKey.trim();
+  if (!baseUrl) throw new LlmRequestError('auth', '请先填写 API 地址。', false);
+  if (!apiKey) throw new LlmRequestError('auth', '请先填写 API Key。', false);
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 15_000);
+  const request = options.fetchImpl ?? window.fetch.bind(window);
+
+  try {
+    const response = await request(resolveModelsUrl(baseUrl), {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: controller.signal,
+    });
+    const bodyText = await response.text();
+    let body: ModelsResponse = {};
+    try {
+      body = bodyText ? JSON.parse(bodyText) as ModelsResponse : {};
+    } catch {
+      throw new LlmRequestError('invalid_json', '模型列表返回了非 JSON 响应，请检查 API 地址。', true, bodyText.slice(0, 300));
+    }
+    if (!response.ok) {
+      const detail = body.error?.message?.slice(0, 300) || bodyText.slice(0, 300) || response.statusText;
+      if (response.status === 401 || response.status === 403) {
+        throw new LlmRequestError('auth', '拉取模型列表鉴权失败，请检查 API Key。', false, detail);
+      }
+      if (response.status === 429) {
+        throw new LlmRequestError('rate_limit', '模型列表请求过于频繁，请稍后重试。', true, detail);
+      }
+      throw new LlmRequestError('http', `模型列表接口返回 HTTP ${response.status}。`, response.status >= 500, detail);
+    }
+
+    const ids = (body.data ?? [])
+      .map((item) => typeof item.id === 'string' ? item.id.trim() : '')
+      .filter(Boolean);
+    if (!ids.length) throw new LlmRequestError('schema_validation', '模型列表为空或格式不受支持。', true);
+    return [...new Set(ids)].sort((a, b) => a.localeCompare(b));
+  } catch (error) {
+    if (error instanceof LlmRequestError) throw error;
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new LlmRequestError('timeout', '拉取模型列表超时，请重试。', true);
+    }
+    if (error instanceof TypeError) {
+      throw new LlmRequestError('network', '无法连接模型列表接口，请检查网络、API 地址及跨域设置。', true, error.message);
+    }
+    throw new LlmRequestError('unknown', '拉取模型列表失败，请重试。', true, error instanceof Error ? error.message : undefined);
+  } finally {
+    clearTimeout(timer);
+  }
 }

@@ -32,8 +32,8 @@ const reagentSchema = z.object({
 const conditionSchema = z.object({
   type: z.enum(['heating', 'digestion', 'reflux', 'evaporation', 'sealed', 'other']),
   description: nonEmpty,
-  temperatureC: z.number().finite().optional(),
-  duration: nonEmpty.optional(),
+  temperatureC: z.preprocess((value) => value ?? undefined, z.number().finite().optional()),
+  duration: z.preprocess((value) => value ?? undefined, nonEmpty.optional()),
 });
 
 const questionSchema = z.object({
@@ -49,7 +49,7 @@ const questionSchema = z.object({
   rationale: nonEmpty,
 });
 
-export const parseResultSchema: z.ZodType<ParseResult> = z
+export const parseResultSchema: z.ZodType<ParseResult, z.ZodTypeDef, unknown> = z
   .object({
     experimentSummary: nonEmpty,
     reagents: z.array(reagentSchema).min(1),
@@ -93,7 +93,7 @@ const compatibilitySchema = z.object({
   hazard: nonEmpty,
   reaction: nonEmpty,
   prevention: nonEmpty,
-  relatedRuleId: nonEmpty.optional(),
+  relatedRuleId: z.preprocess((value) => value ?? undefined, nonEmpty.optional()),
 });
 
 const ppeSchema = z.object({
@@ -151,11 +151,11 @@ const wasteStreamSchema = z.object({
 const dispositionSchema = z.object({
   reagentName: nonEmpty,
   destination: z.enum(['waste_stream', 'reacted_or_consumed', 'not_used']),
-  wasteStreamId: nonEmpty.optional(),
+  wasteStreamId: z.preprocess((value) => value ?? undefined, nonEmpty.optional()),
   note: nonEmpty,
 });
 
-export const safetyDraftSchema: z.ZodType<SafetyDraft> = z
+export const safetyDraftSchema: z.ZodType<SafetyDraft, z.ZodTypeDef, unknown> = z
   .object({
     draftId: nonEmpty,
     attempt: z.number().int().positive(),
@@ -268,7 +268,7 @@ export function parseAgentJson(raw: string): unknown {
   }
 }
 
-function validate<T>(schema: z.ZodType<T>, raw: string): T {
+function validate<T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>, raw: string): T {
   const parsed = schema.safeParse(parseAgentJson(raw));
   if (!parsed.success) {
     const summary = parsed.error.issues

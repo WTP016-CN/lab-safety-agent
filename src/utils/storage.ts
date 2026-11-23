@@ -5,7 +5,7 @@ const MOCK_KEY = 'safebeaker.mock-mode.v1';
 const HISTORY_KEY = 'safebeaker.history.v1';
 
 export const DEFAULT_SETTINGS: ModelSettings = {
-  baseUrl: 'https://api.deepseek.com/v1',
+  baseUrl: 'https://api.deepseek.com/chat/completions',
   apiKey: '',
   model: 'deepseek-flash',
 };

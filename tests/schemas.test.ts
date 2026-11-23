@@ -82,6 +82,20 @@ describe('agent JSON contract', () => {
     expect(validateParseResult(JSON.stringify(parseOutput)).next_action).toBe('GENERATE');
   });
 
+  it('normalizes model null optional fields to undefined', () => {
+    const result = validateParseResult(JSON.stringify({
+      ...parseOutput,
+      conditions: [
+        { type: 'heating', description: '加热消解', temperatureC: null, duration: null },
+        { type: 'digestion', description: '酸消解' },
+      ],
+    }));
+    expect(result.conditions).toEqual([
+      { type: 'heating', description: '加热消解' },
+      { type: 'digestion', description: '酸消解' },
+    ]);
+  });
+
   it('rejects CLARIFY without questions', () => {
     const invalid = {
       ...parseOutput,

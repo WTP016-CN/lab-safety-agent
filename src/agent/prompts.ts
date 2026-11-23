@@ -34,7 +34,7 @@ ${sharedRules}
   }]
 }
 categories 只能取：strong_acid, concentrated_sulfuric_acid, strong_base, strong_oxidizer, organic_reducer, cyanide, sulfide, fluoride, hydrofluoric_acid, mercury, chromium_vi, heavy_metal, halogenated_organic, nonhalogenated_organic。
-conditions.type 只能取：heating, digestion, reflux, evaporation, sealed, other。
+conditions.type 只能取：heating, digestion, reflux, evaporation, sealed, other。未知的 temperatureC 或 duration 字段请省略，不要填 null。
 最多追问 5 题；每题 2-6 个选项；不要询问原始输入中已经明确的信息。
 `.trim();
 
