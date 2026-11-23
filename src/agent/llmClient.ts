@@ -102,7 +102,7 @@ export class LlmEngine implements AgentEngine {
       model: settings.model.trim(),
     };
     this.timeoutMs = options.timeoutMs ?? 75_000;
-    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.fetchImpl = options.fetchImpl ?? window.fetch.bind(window);
     this.onRequest = options.onRequest;
   }
 
