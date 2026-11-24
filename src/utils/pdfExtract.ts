@@ -1,5 +1,11 @@
 import type { PDFPageProxy } from 'pdfjs-dist';
 import type { ExperimentInput, ModelSettings } from '../agent/types';
+import {
+  extractCompletionText,
+  parseSseTranscript,
+  resolveChatCompletionsUrl as resolveEndpoint,
+} from '../agent/llmClient';
+import { cleanJsonText } from '../agent/schemas';
 
 export type PdfExtractMode = 'text' | 'vision' | 'mixed';
 
@@ -283,8 +289,6 @@ async function requestVisionText(
       },
       body: JSON.stringify({
         model,
-        temperature: 0.1,
-        max_tokens: 6000,
         messages: [
           {
             role: 'user',
@@ -302,8 +306,11 @@ async function requestVisionText(
     });
 
     const bodyText = await response.text();
+    const trimmed = bodyText.trim();
     let body: ChatCompletionResponse = {};
-    if (bodyText) {
+    if (trimmed.startsWith('data:') || trimmed.includes('\ndata:')) {
+      body = (parseSseTranscript(bodyText) as ChatCompletionResponse | null) ?? {};
+    } else if (trimmed) {
       try {
         body = JSON.parse(bodyText) as ChatCompletionResponse;
       } catch {
@@ -333,10 +340,11 @@ async function requestVisionText(
       );
     }
 
-    const content = contentAsText(body).trim();
+    const content = extractCompletionText(body as Parameters<typeof extractCompletionText>[0]).trim();
     if (!content) {
       throw new PdfImportError(
         '模型未返回识别文字，请重试或更换支持视觉输入的模型。',
+        bodyText.slice(0, 300),
       );
     }
     return content;
@@ -363,9 +371,11 @@ async function requestVisionText(
 }
 
 function resolveChatCompletionsUrl(baseUrl: string): string {
-  const base = baseUrl.trim().replace(/\/+$/, '');
-  if (!base) throw new PdfImportError('请先在模型设置中填写 Base URL。');
-  return /\/chat\/completions$/i.test(base) ? base : `${base}/chat/completions`;
+  try {
+    return resolveEndpoint(baseUrl);
+  } catch {
+    throw new PdfImportError('请先在模型设置中填写 Base URL。');
+  }
 }
 
 function parseVisionText(content: string): VisionSections {
@@ -404,13 +414,11 @@ function parseVisionText(content: string): VisionSections {
 }
 
 function extractJsonObject(value: string): Record<string, unknown> | null {
-  const cleaned = value.replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
-  const start = cleaned.indexOf('{');
-  const end = cleaned.lastIndexOf('}');
-  if (start < 0 || end <= start) return null;
+  const cleaned = cleanJsonText(value);
+  if (!cleaned.startsWith('{')) return null;
 
   try {
-    const parsed: unknown = JSON.parse(cleaned.slice(start, end + 1));
+    const parsed: unknown = JSON.parse(cleaned);
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
       ? (parsed as Record<string, unknown>)
       : null;
@@ -436,15 +444,6 @@ function asText(value: unknown): string {
       .filter(Boolean)
       .join('\n'),
   );
-}
-
-function contentAsText(data: ChatCompletionResponse): string {
-  const content = data.choices?.[0]?.message?.content;
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-  return content
-    .map((part) => (part.type === 'text' ? part.text ?? '' : ''))
-    .join('');
 }
 
 function textFromItems(items: ReadonlyArray<unknown>): string {

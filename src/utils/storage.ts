@@ -8,7 +8,7 @@ const MAX_HISTORY = 30;
 export const DEFAULT_SETTINGS: ModelSettings = {
   baseUrl: 'https://api.deepseek.com/chat/completions',
   apiKey: '',
-  model: 'deepseek-flash',
+  model: 'deepseek-chat',
 };
 
 export class StorageError extends Error {
@@ -38,10 +38,17 @@ export function loadSettings(): ModelSettings {
   try {
     const value = JSON.parse(readItem(SETTINGS_KEY) ?? 'null') as Partial<ModelSettings> | null;
     if (!value || typeof value !== 'object') return DEFAULT_SETTINGS;
+    const baseUrl = typeof value.baseUrl === 'string' ? value.baseUrl : DEFAULT_SETTINGS.baseUrl;
+    let model = typeof value.model === 'string' ? value.model : DEFAULT_SETTINGS.model;
+    // Migrate the old broken default (`deepseek-flash` does not exist on DeepSeek / SiliconFlow).
+    if (model === 'deepseek-flash') {
+      if (/api\.deepseek\.com/i.test(baseUrl)) model = 'deepseek-chat';
+      else if (/api\.siliconflow\.cn/i.test(baseUrl)) model = 'deepseek-ai/DeepSeek-V3';
+    }
     return {
-      baseUrl: typeof value.baseUrl === 'string' ? value.baseUrl : DEFAULT_SETTINGS.baseUrl,
+      baseUrl,
       apiKey: typeof value.apiKey === 'string' ? value.apiKey : '',
-      model: typeof value.model === 'string' ? value.model : DEFAULT_SETTINGS.model,
+      model,
     };
   } catch {
     return DEFAULT_SETTINGS;

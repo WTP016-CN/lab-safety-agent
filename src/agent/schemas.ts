@@ -53,8 +53,16 @@ const reagentSchema = z.object({
   hazards: list(nonEmpty),
 });
 
+const conditionType = z.preprocess(
+  (value) => (typeof value === 'string'
+    && ['heating', 'digestion', 'reflux', 'evaporation', 'sealed', 'other'].includes(value)
+    ? value
+    : typeof value === 'string' ? 'other' : value),
+  z.enum(['heating', 'digestion', 'reflux', 'evaporation', 'sealed', 'other']),
+);
+
 const conditionSchema = z.object({
-  type: z.enum(['heating', 'digestion', 'reflux', 'evaporation', 'sealed', 'other']),
+  type: conditionType,
   description: nonEmpty,
   temperatureC: optionalNumber,
   duration: optionalText,
@@ -68,44 +76,41 @@ const questionSchema = z.object({
     .array(z.object({ value: nonEmpty, label: nonEmpty }))
     .min(2)
     .max(10),
-  required: z.boolean(),
-  allowSupplement: z.boolean(),
-  rationale: nonEmpty,
+  required: z.boolean().default(true),
+  allowSupplement: z.boolean().default(true),
+  rationale: z.preprocess(blankToUndefined, nonEmpty.default('补充关键安全条件以完成风险评估')),
 });
 
 export const parseResultSchema: z.ZodType<ParseResult, z.ZodTypeDef, unknown> = z
   .object({
     experimentSummary: nonEmpty,
-    reagents: z.array(reagentSchema).min(1),
+    reagents: list(reagentSchema),
     conditions: list(conditionSchema),
     initialRisk: riskLevel,
     riskReasons: z.array(nonEmpty).min(1),
-    informationComplete: z.boolean(),
+    informationComplete: z.boolean().optional(),
     next_action: z.enum(['CLARIFY', 'GENERATE']),
     missing_questions: list(questionSchema),
   })
+  .transform((value): ParseResult => ({
+    ...value,
+    // Keep `informationComplete` consistent with `next_action` even if the LLM contradicts itself.
+    informationComplete: value.next_action === 'GENERATE',
+    missing_questions: value.next_action === 'GENERATE' ? [] : value.missing_questions,
+  }))
   .superRefine((value, context) => {
-    if (value.next_action === 'CLARIFY') {
-      if (value.informationComplete) {
-        context.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['informationComplete'],
-          message: 'CLARIFY 分支下 informationComplete 必须为 false',
-        });
-      }
-      if (value.missing_questions.length === 0) {
-        context.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['missing_questions'],
-          message: 'CLARIFY 分支必须提供至少一个追问问题',
-        });
-      }
-    }
-    if (value.next_action === 'GENERATE' && !value.informationComplete) {
+    if (value.next_action === 'CLARIFY' && value.missing_questions.length === 0) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
-        path: ['informationComplete'],
-        message: 'GENERATE 分支必须确认信息完整',
+        path: ['missing_questions'],
+        message: 'CLARIFY 分支必须提供至少一个追问问题',
+      });
+    }
+    if (value.next_action === 'GENERATE' && value.reagents.length === 0) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['reagents'],
+        message: 'GENERATE 分支必须至少识别出一种试剂',
       });
     }
   });
@@ -193,6 +198,15 @@ export const safetyDraftSchema: z.ZodType<SafetyDraft, z.ZodTypeDef, unknown> = 
     reagentDisposition: z.array(dispositionSchema).min(1),
     checklist: z.array(nonEmpty).min(1),
   })
+  .transform((value): SafetyDraft => ({
+    ...value,
+    // Models often fill `wasteStreamId: "无" / "none"` when `destination !== "waste_stream"`.
+    reagentDisposition: value.reagentDisposition.map((item) =>
+      item.destination === 'waste_stream'
+        ? item
+        : { reagentName: item.reagentName, destination: item.destination, note: item.note },
+    ),
+  }))
   .superRefine((value, context) => {
     const streamIds = new Set(value.wasteStreams.map((stream) => stream.id));
     if (streamIds.size !== value.wasteStreams.length) {
@@ -262,9 +276,14 @@ export class AgentOutputError extends Error {
   }
 }
 
-/** Removes markdown fences and isolates the first complete-looking JSON object. */
+/** Removes `<think>` reasoning blocks, markdown fences, and isolates the JSON object. */
 export function cleanJsonText(raw: string): string {
-  let text = raw.trim();
+  let text = raw.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  const danglingClose = text.lastIndexOf('</think>');
+  if (danglingClose >= 0) {
+    text = text.slice(danglingClose + '</think>'.length).trim();
+  }
+
   const fenced = text.match(/```(?:json|JSON)?\s*([\s\S]*?)```/);
   if (fenced?.[1]) {
     text = fenced[1].trim();
