@@ -364,7 +364,7 @@ export class LlmEngine implements AgentEngine {
     }
 
     this.onRequest?.(node);
-    // Do NOT set a low `max_tokens` upfront: reasoning models (deepseek-reasoner, Qwen3,
+    // Do NOT set a low `max_tokens` upfront: reasoning models (deepseek-v4-pro, deepseek-flash, Qwen3,
     // GLM, Gemini thinking, etc.) count thinking tokens against `max_tokens` and return
     // empty `content` if capped at 2000–3500. Let the provider use the model's native limit,
     // and only escalate `max_tokens` on `finish_reason === "length"`.
@@ -394,12 +394,14 @@ export class LlmEngine implements AgentEngine {
 
     // 2. Server's default `max_tokens` was too small and cut off thinking/output (`finish_reason: length`)
     if (result.kind === 'truncated') {
-      const retry = await this.requestOnce(system, user, { omitTemperature: true, maxTokens: 16_384 });
+      let retry = await this.requestOnce(system, user, { omitTemperature: true, maxTokens: 32_768 });
       if (retry.kind === 'max_tokens_out_of_range') {
-        result = await this.requestOnce(system, user, { omitTemperature: true, maxTokens: 8_192 });
-      } else {
-        result = retry;
+        retry = await this.requestOnce(system, user, { omitTemperature: true, maxTokens: 16_384 });
       }
+      if (retry.kind === 'max_tokens_out_of_range') {
+        retry = await this.requestOnce(system, user, { omitTemperature: true, maxTokens: 8_192 });
+      }
+      result = retry;
     }
 
     // 3. Some OpenAI-compatible relays return empty `choices[0].message.content` unless `stream: true` is used
@@ -578,7 +580,7 @@ export class LlmEngine implements AgentEngine {
             kind: 'truncated',
             error: new LlmRequestError(
               'invalid_json',
-              '模型输出因 Token 上限被截断，JSON 未生成完整。建议切换为非推理对话模型（如 deepseek-chat）或重试。',
+              '模型输出因 Token 上限被截断，JSON 未生成完整。建议切换为快速模型（如 deepseek-flash）或重试。',
               true,
               summarizeDebug(url, response.status, bodyText, parsedBody),
             ),
@@ -592,7 +594,7 @@ export class LlmEngine implements AgentEngine {
           kind: 'truncated',
           error: new LlmRequestError(
             'invalid_json',
-            '推理模型在思考阶段耗尽了输出 Token 上限，未生成最终 JSON。建议在「模型设置」中切换为对话模型（如 deepseek-chat）后重试。',
+            '推理模型在思考阶段耗尽了输出 Token 上限，未生成最终 JSON。建议在「模型设置」中切换为快速模型（如 deepseek-flash）后重试。',
             true,
             summarizeDebug(url, response.status, bodyText, parsedBody),
           ),
@@ -617,7 +619,7 @@ export class LlmEngine implements AgentEngine {
         }
         throw new LlmRequestError(
           'timeout',
-          `模型请求超时（${Math.round(this.timeoutMs / 1000)} 秒）。若使用深度推理模型，可切换为对话模型（如 deepseek-chat）或重试本步骤。`,
+          `模型请求超时（${Math.round(this.timeoutMs / 1000)} 秒）。若使用深度推理模型，可切换为快速模型（如 deepseek-flash）或重试本步骤。`,
           true,
         );
       }

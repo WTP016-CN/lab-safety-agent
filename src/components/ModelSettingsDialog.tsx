@@ -5,9 +5,9 @@ import type { ModelSettings } from '../agent/types';
 import { DEFAULT_SETTINGS } from '../utils/storage';
 
 const providers = [
-  { name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/chat/completions', model: 'deepseek-chat' },
+  { name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/chat/completions', model: 'deepseek-flash' },
   { name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
-  { name: '硅基流动', baseUrl: 'https://api.siliconflow.cn/v1', model: 'deepseek-ai/DeepSeek-V3' },
+  { name: '硅基流动', baseUrl: 'https://api.siliconflow.cn/v1', model: 'deepseek-flash' },
 ];
 
 type ModelStatus = { state: 'idle' | 'loading' | 'success' | 'error'; message?: string };
@@ -38,15 +38,12 @@ export function ModelSettingsDialog({ initial, open, onClose, onSave }: { initia
       .then((ids) => {
         if (loadId !== loadIdRef.current) return;
         setModels(ids);
-        // Auto-select a sensible model if the current value is missing from the provider's list.
+        // Only auto-select a model when the field is blank; never overwrite user-entered models.
         setSettings((current) => {
           const trimmed = current.model.trim();
-          if (trimmed && ids.includes(trimmed)) return current;
-          const preferred = ids.find((id) => id === 'deepseek-chat' || id === 'gpt-4o-mini' || /deepseek-v3/i.test(id)) ?? ids[0];
-          if (!trimmed || trimmed === 'deepseek-flash') {
-            return preferred ? { ...current, model: preferred } : current;
-          }
-          return current;
+          if (trimmed) return current;
+          const preferred = ids.find((id) => id === 'deepseek-flash' || id === 'gpt-4o-mini') ?? ids[0];
+          return preferred ? { ...current, model: preferred } : current;
         });
         setModelStatus({ state: 'success', message: `已获取 ${ids.length} 个可用模型` });
       })
@@ -89,7 +86,7 @@ export function ModelSettingsDialog({ initial, open, onClose, onSave }: { initia
         </label>
         <label className="field">
           <span>Model Name<button type="button" className="models-refresh" onClick={refreshModels} disabled={modelStatus.state === 'loading' || !settings.apiKey.trim() || !settings.baseUrl.trim()}>{modelStatus.state === 'loading' ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />}拉取模型</button></span>
-          <input value={settings.model} onChange={selectModel} placeholder="deepseek-chat" list="safebeaker-models" />
+          <input value={settings.model} onChange={selectModel} placeholder="deepseek-flash" list="safebeaker-models" />
           <datalist id="safebeaker-models">{models.map((model) => <option key={model} value={model} />)}</datalist>
           {modelStatus.message && <small className={`models-status ${modelStatus.state}`}>{modelStatus.message}{modelStatus.state === 'success' && settings.model.trim() && models.length > 0 && !models.includes(settings.model.trim()) ? `（提示：当前填写的「${settings.model.trim()}」不在服务端列表中）` : ''}</small>}
         </label>

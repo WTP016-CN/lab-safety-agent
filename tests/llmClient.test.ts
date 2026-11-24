@@ -9,7 +9,7 @@ import {
 } from '../src/agent/llmClient';
 import { cleanJsonText, parseAgentJson, validateSafetyDraft } from '../src/agent/schemas';
 import { createSession } from '../src/agent/stateMachine';
-import { loadSettings } from '../src/utils/storage';
+import { DEFAULT_SETTINGS, loadSettings } from '../src/utils/storage';
 
 const auditOkJson = '{"passed":true,"issues":[]}';
 
@@ -43,9 +43,9 @@ describe('model endpoint helpers', () => {
   });
 
   it('extracts sorted unique model ids', async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: [{ id: 'deepseek-chat' }, { id: 'deepseek-reasoner' }, { id: 'deepseek-chat' }] })));
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: [{ id: 'deepseek-v4-pro' }, { id: 'deepseek-flash' }, { id: 'deepseek-flash' }] })));
     const models = await fetchModelIds({ baseUrl: 'https://api.example.com/v1', apiKey: 'sk-test' }, { fetchImpl });
-    expect(models).toEqual(['deepseek-chat', 'deepseek-reasoner']);
+    expect(models).toEqual(['deepseek-flash', 'deepseek-v4-pro']);
     expect(fetchImpl).toHaveBeenCalledWith('https://api.example.com/v1/models', expect.objectContaining({ headers: { Authorization: 'Bearer sk-test' } }));
   });
 });
@@ -74,13 +74,13 @@ describe('real-world LLM compatibility', () => {
     });
 
     const engine = new LlmEngine(
-      { baseUrl: 'https://api.deepseek.com/chat/completions', apiKey: 'sk-test', model: 'deepseek-reasoner' },
+      { baseUrl: 'https://api.deepseek.com/chat/completions', apiKey: 'sk-test', model: 'deepseek-v4-pro' },
       { fetchImpl: fetchImpl as typeof fetch },
     );
     const res = await engine.audit(createSession({ name: 'n', procedure: 'p', reagentListText: 'r' }), sampleDraft);
     expect(res).toEqual({ passed: true, issues: [] });
     expect(calls[0].max_tokens).toBeUndefined();
-    expect(calls[1].max_tokens).toBe(16_384);
+    expect(calls[1].max_tokens).toBe(32_768);
   });
 
   it('falls back to stream:true SSE when a relay returns empty non-streaming content', async () => {
@@ -101,7 +101,7 @@ describe('real-world LLM compatibility', () => {
     });
 
     const engine = new LlmEngine(
-      { baseUrl: 'https://relay.example.com/v1', apiKey: 'sk-test', model: 'deepseek-chat' },
+      { baseUrl: 'https://relay.example.com/v1', apiKey: 'sk-test', model: 'deepseek-flash' },
       { fetchImpl: fetchImpl as typeof fetch },
     );
     const res = await engine.audit(createSession({ name: 'n', procedure: 'p', reagentListText: 'r' }), sampleDraft);
@@ -111,21 +111,21 @@ describe('real-world LLM compatibility', () => {
 
   it('surfaces HTTP-200 gateway error envelopes instead of opaque empty-content errors', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ error: { message: '模型 deepseek-flash 不存在' } }), { status: 200 }),
+      new Response(JSON.stringify({ error: { message: '模型 deepseek-unknown 不存在' } }), { status: 200 }),
     );
     const engine = new LlmEngine(
-      { baseUrl: 'https://relay.example.com/v1', apiKey: 'sk-test', model: 'deepseek-flash' },
+      { baseUrl: 'https://relay.example.com/v1', apiKey: 'sk-test', model: 'deepseek-unknown' },
       { fetchImpl },
     );
     await expect(
       engine.audit(createSession({ name: 'n', procedure: 'p', reagentListText: 'r' }), sampleDraft),
-    ).rejects.toThrow(/deepseek-flash 不存在/);
+    ).rejects.toThrow(/deepseek-unknown 不存在/);
   });
 
   it('attaches diagnostic detail when a response genuinely has no text', async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ status: 'ok' }), { status: 200 }));
     const engine = new LlmEngine(
-      { baseUrl: 'https://relay.example.com/v1', apiKey: 'sk-test', model: 'deepseek-chat' },
+      { baseUrl: 'https://relay.example.com/v1', apiKey: 'sk-test', model: 'deepseek-flash' },
       { fetchImpl },
     );
     try {
@@ -167,17 +167,23 @@ describe('real-world LLM compatibility', () => {
     expect(validated.reagentDisposition[1].wasteStreamId).toBeUndefined();
   });
 
-  it('migrates legacy deepseek-flash default model in localStorage', () => {
-    const storage = new Map<string, string>([[
-      'safebeaker.model-settings.v1',
-      JSON.stringify({ baseUrl: 'https://api.deepseek.com/chat/completions', apiKey: 'sk-1', model: 'deepseek-flash' }),
-    ]]);
+  it('defaults to deepseek-flash, preserves V4 models, and migrates stale deepseek-chat on DeepSeek', () => {
+    expect(DEFAULT_SETTINGS.model).toBe('deepseek-flash');
+
+    const store = { value: '' };
     vi.stubGlobal('localStorage', {
-      getItem: (key: string) => storage.get(key) ?? null,
-      setItem: (key: string, val: string) => { storage.set(key, val); },
+      getItem: () => store.value || null,
+      setItem: (_key: string, val: string) => { store.value = val; },
     });
     try {
-      expect(loadSettings().model).toBe('deepseek-chat');
+      store.value = JSON.stringify({ baseUrl: 'https://api.deepseek.com/chat/completions', apiKey: 'sk-1', model: 'deepseek-flash' });
+      expect(loadSettings().model).toBe('deepseek-flash');
+
+      store.value = JSON.stringify({ baseUrl: 'https://api.deepseek.com/chat/completions', apiKey: 'sk-1', model: 'deepseek-v4-pro' });
+      expect(loadSettings().model).toBe('deepseek-v4-pro');
+
+      store.value = JSON.stringify({ baseUrl: 'https://api.deepseek.com/chat/completions', apiKey: 'sk-1', model: 'deepseek-chat' });
+      expect(loadSettings().model).toBe('deepseek-flash');
     } finally {
       vi.unstubAllGlobals();
     }
