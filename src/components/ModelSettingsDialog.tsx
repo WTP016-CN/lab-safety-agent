@@ -1,5 +1,5 @@
 import { ExternalLink, Eye, EyeOff, KeyRound, Loader2, RefreshCw, Settings2, X } from 'lucide-react';
-import { useEffect, useRef, useState, type ChangeEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { fetchModelIds } from '../agent/llmClient';
 import type { ModelSettings } from '../agent/types';
 import { DEFAULT_SETTINGS } from '../utils/storage';
@@ -19,31 +19,22 @@ export function ModelSettingsDialog({ initial, open, onClose, onSave }: { initia
   const [modelStatus, setModelStatus] = useState<ModelStatus>({ state: 'idle' });
   const loadIdRef = useRef(0);
 
-  useEffect(() => {
-    if (!open || !settings.apiKey.trim() || !settings.baseUrl.trim()) return;
-    const loadId = ++loadIdRef.current;
-    const timer = setTimeout(() => {
-      setModels([]);
-      setModelStatus({ state: 'loading', message: '正在拉取模型列表…' });
-      fetchModelIds({ baseUrl: settings.baseUrl, apiKey: settings.apiKey })
-        .then((ids) => {
-          if (loadId !== loadIdRef.current) return;
-          setModels(ids);
-          setModelStatus({ state: 'success', message: `已获取 ${ids.length} 个可用模型` });
-        })
-        .catch((error: unknown) => {
-          if (loadId !== loadIdRef.current) return;
-          setModelStatus({ state: 'error', message: error instanceof Error ? error.message : '拉取模型列表失败' });
-        });
-    }, 500);
-    return () => clearTimeout(timer);
-  }, [open, settings.apiKey, settings.baseUrl]);
+  // Discard unsaved edits: every time the dialog opens it starts from the saved settings.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (open) { setSettings(initial); setShowKey(false); } }, [open]);
 
-  const refreshModels = () => {
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [open, onClose]);
+
+  const loadModels = useCallback((baseUrl: string, apiKey: string) => {
     const loadId = ++loadIdRef.current;
     setModels([]);
     setModelStatus({ state: 'loading', message: '正在拉取模型列表…' });
-    fetchModelIds({ baseUrl: settings.baseUrl, apiKey: settings.apiKey })
+    fetchModelIds({ baseUrl, apiKey })
       .then((ids) => {
         if (loadId !== loadIdRef.current) return;
         setModels(ids);
@@ -53,7 +44,15 @@ export function ModelSettingsDialog({ initial, open, onClose, onSave }: { initia
         if (loadId !== loadIdRef.current) return;
         setModelStatus({ state: 'error', message: error instanceof Error ? error.message : '拉取模型列表失败' });
       });
-  };
+  }, []);
+
+  useEffect(() => {
+    if (!open || !settings.apiKey.trim() || !settings.baseUrl.trim()) return;
+    const timer = setTimeout(() => loadModels(settings.baseUrl, settings.apiKey), 500);
+    return () => clearTimeout(timer);
+  }, [open, settings.apiKey, settings.baseUrl, loadModels]);
+
+  const refreshModels = () => loadModels(settings.baseUrl, settings.apiKey);
 
   const selectModel = (event: ChangeEvent<HTMLInputElement>) => {
     setSettings({ ...settings, model: event.target.value });

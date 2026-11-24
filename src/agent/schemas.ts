@@ -3,7 +3,7 @@ import type { AiAuditResult, ParseResult, SafetyDraft } from './types';
 
 const nonEmpty = z.string().trim().min(1);
 const riskLevel = z.enum(['low', 'medium', 'high']);
-const hazardTag = z.enum([
+const HAZARD_TAGS = [
   'strong_acid',
   'concentrated_sulfuric_acid',
   'strong_base',
@@ -18,22 +18,46 @@ const hazardTag = z.enum([
   'heavy_metal',
   'halogenated_organic',
   'nonhalogenated_organic',
-]);
+] as const;
+const hazardTag = z.enum(HAZARD_TAGS);
+
+/** Models often emit `null` or `""` for unknown optional fields; treat both as absent. */
+const blankToUndefined = (value: unknown) =>
+  value === null || (typeof value === 'string' && !value.trim()) ? undefined : value;
+const optionalText = z.preprocess(blankToUndefined, nonEmpty.optional());
+const optionalNumber = z.preprocess((value) => {
+  const cleaned = blankToUndefined(value);
+  if (typeof cleaned === 'string' && /^-?\d+(?:\.\d+)?$/.test(cleaned.trim())) return Number(cleaned);
+  return cleaned;
+}, z.number().finite().optional());
+/** Arrays that may legitimately be empty: accept `null` as `[]`. */
+const list = <T extends z.ZodTypeAny>(item: T) =>
+  z.preprocess((value) => value ?? [], z.array(item));
+/**
+ * Hazard tags are display metadata (local rules re-derive hazards from names),
+ * so unknown tags are dropped instead of failing the whole step.
+ */
+const hazardTagList = z.preprocess(
+  (value) => (Array.isArray(value)
+    ? value.filter((tag) => (HAZARD_TAGS as readonly unknown[]).includes(tag))
+    : value ?? []),
+  z.array(hazardTag),
+);
 
 const reagentSchema = z.object({
   name: nonEmpty,
-  cas: nonEmpty.optional(),
-  concentration: nonEmpty.optional(),
-  amount: nonEmpty.optional(),
-  categories: z.array(hazardTag),
-  hazards: z.array(nonEmpty),
+  cas: optionalText,
+  concentration: optionalText,
+  amount: optionalText,
+  categories: hazardTagList,
+  hazards: list(nonEmpty),
 });
 
 const conditionSchema = z.object({
   type: z.enum(['heating', 'digestion', 'reflux', 'evaporation', 'sealed', 'other']),
   description: nonEmpty,
-  temperatureC: z.preprocess((value) => value ?? undefined, z.number().finite().optional()),
-  duration: z.preprocess((value) => value ?? undefined, nonEmpty.optional()),
+  temperatureC: optionalNumber,
+  duration: optionalText,
 });
 
 const questionSchema = z.object({
@@ -53,12 +77,12 @@ export const parseResultSchema: z.ZodType<ParseResult, z.ZodTypeDef, unknown> = 
   .object({
     experimentSummary: nonEmpty,
     reagents: z.array(reagentSchema).min(1),
-    conditions: z.array(conditionSchema),
+    conditions: list(conditionSchema),
     initialRisk: riskLevel,
     riskReasons: z.array(nonEmpty).min(1),
     informationComplete: z.boolean(),
     next_action: z.enum(['CLARIFY', 'GENERATE']),
-    missing_questions: z.array(questionSchema),
+    missing_questions: list(questionSchema),
   })
   .superRefine((value, context) => {
     if (value.next_action === 'CLARIFY') {
@@ -93,7 +117,7 @@ const compatibilitySchema = z.object({
   hazard: nonEmpty,
   reaction: nonEmpty,
   prevention: nonEmpty,
-  relatedRuleId: z.preprocess((value) => value ?? undefined, nonEmpty.optional()),
+  relatedRuleId: optionalText,
 });
 
 const ppeSchema = z.object({
@@ -107,14 +131,14 @@ const ppeSchema = z.object({
     )
     .min(1),
   ventilation: nonEmpty,
-  additionalControls: z.array(nonEmpty),
+  additionalControls: list(nonEmpty),
 });
 
 const sopSchema = z.object({
   order: z.number().int().positive(),
   title: nonEmpty,
   actions: z.array(nonEmpty).min(1),
-  safetyNotes: z.array(nonEmpty),
+  safetyNotes: list(nonEmpty),
 });
 
 const emergencySchema = z.object({
@@ -142,7 +166,7 @@ const wasteStreamSchema = z.object({
   category: wasteCategory,
   bucketLabel: nonEmpty,
   mainComponents: z.array(nonEmpty).min(1),
-  hazardTags: z.array(hazardTag),
+  hazardTags: hazardTagList,
   forbiddenItems: z.array(nonEmpty).min(1),
   containerSpec: nonEmpty,
   storageNotes: nonEmpty,
@@ -151,7 +175,7 @@ const wasteStreamSchema = z.object({
 const dispositionSchema = z.object({
   reagentName: nonEmpty,
   destination: z.enum(['waste_stream', 'reacted_or_consumed', 'not_used']),
-  wasteStreamId: z.preprocess((value) => value ?? undefined, nonEmpty.optional()),
+  wasteStreamId: optionalText,
   note: nonEmpty,
 });
 
@@ -161,7 +185,7 @@ export const safetyDraftSchema: z.ZodType<SafetyDraft, z.ZodTypeDef, unknown> = 
     attempt: z.number().int().positive(),
     riskLevel,
     riskRationale: z.array(nonEmpty).min(1),
-    compatibilityWarnings: z.array(compatibilitySchema),
+    compatibilityWarnings: list(compatibilitySchema),
     ppe: ppeSchema,
     sop: z.array(sopSchema).min(1),
     emergencyProcedures: z.array(emergencySchema).min(1),
@@ -207,10 +231,10 @@ export const safetyDraftSchema: z.ZodType<SafetyDraft, z.ZodTypeDef, unknown> = 
     });
   });
 
-export const aiAuditResultSchema: z.ZodType<AiAuditResult> = z
+export const aiAuditResultSchema: z.ZodType<AiAuditResult, z.ZodTypeDef, unknown> = z
   .object({
     passed: z.boolean(),
-    issues: z.array(nonEmpty),
+    issues: list(nonEmpty),
   })
   .superRefine((value, context) => {
     if (!value.passed && value.issues.length === 0) {

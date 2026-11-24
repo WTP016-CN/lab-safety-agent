@@ -4,6 +4,7 @@ import type {
   ClarificationAnswer,
   ExperimentInput,
   ModelSettings,
+  ParseResult,
   SafetyDraft,
   SessionContext,
   StepError,
@@ -37,6 +38,11 @@ function toStepError(error: unknown, step: WorkflowState): StepError {
   };
 }
 
+const resume = (session: SessionContext): SessionContext => ({
+  ...session,
+  workflow: { ...session.workflow, status: 'running', error: null },
+});
+
 export function useWorkflow(
   settings: ModelSettings,
   mockMode: boolean,
@@ -44,8 +50,11 @@ export function useWorkflow(
 ) {
   const [session, setSession] = useState<SessionContext | null>(null);
   const sessionRef = useRef<SessionContext | null>(null);
-  const runningRef = useRef(false);
+  /** Id of the session whose async chain currently owns the workflow, or null when idle. */
+  const runningRef = useRef<string | null>(null);
   const retryRef = useRef<(() => Promise<void>) | null>(null);
+  /** Cancels in-flight model requests when the user abandons the current session. */
+  const abortRef = useRef<AbortController | null>(null);
 
   const commit = useCallback((next: SessionContext) => {
     sessionRef.current = next;
@@ -53,13 +62,26 @@ export function useWorkflow(
     return next;
   }, []);
 
+  const isActive = useCallback((id: string) => sessionRef.current?.id === id, []);
+
+  /**
+   * Commits only while the session is still the one on screen. Async chains of an
+   * abandoned session (reset / history opened / new review started) are silently dropped
+   * instead of overwriting the current UI.
+   */
+  const commitActive = useCallback((next: SessionContext): boolean => {
+    if (!isActive(next.id)) return false;
+    commit(next);
+    return true;
+  }, [commit, isActive]);
+
   const getEngine = useCallback((): AgentEngine => {
     if (mockMode) return new MockAgentEngine();
     if (!settings.apiKey.trim()) {
       onSettingsRequired();
       throw new Error('未配置 API Key。请打开「模型设置」填写 Key，或开启离线演示模式。');
     }
-    return createLlmEngine(settings);
+    return createLlmEngine(settings, { signal: abortRef.current?.signal });
   }, [mockMode, onSettingsRequired, settings]);
 
   const finishAudit = useCallback(async (
@@ -70,6 +92,7 @@ export function useWorkflow(
     let working = current;
     try {
       const ai = await getEngine().audit(working, draft);
+      if (!isActive(working.id)) return;
       const passed = local.passed && ai.passed;
       const issues = [
         ...local.issues.map((issue) => `[${issue.ruleId}] ${issue.message} ${issue.suggestion}`),
@@ -102,7 +125,7 @@ export function useWorkflow(
       );
 
       if (passed) {
-        commit(transition(working, 'REPORT', 'done', '本地规则与 AI 审核均通过，生成最终报告'));
+        commitActive(transition(working, 'REPORT', 'done', '本地规则与 AI 审核均通过，生成最终报告'));
         return;
       }
       if (working.audit.retryCount < MAX_REWRITES) {
@@ -118,8 +141,9 @@ export function useWorkflow(
           `拦截到潜在安全漏洞，正在自动修正（第 ${nextAttempt} 次）`,
           { attempt: nextAttempt, details: { issues } },
         );
-        commit(working);
+        if (!commitActive(working)) return;
         await new Promise((resolve) => setTimeout(resolve, 450));
+        if (!isActive(working.id)) return;
         await generateAndAudit(working, issues);
         return;
       }
@@ -127,19 +151,20 @@ export function useWorkflow(
         ...working,
         audit: { ...working.audit, requiresManualReview: true },
       };
-      commit(transition(working, 'REPORT', 'done', '达到最大自动重写次数，报告已标注人工复核'));
+      commitActive(transition(working, 'REPORT', 'done', '达到最大自动重写次数，报告已标注人工复核'));
     } catch (error) {
-      const errored = failStep(working, toStepError(error, 'AUDIT'));
-      commit(errored);
+      if (!commitActive(failStep(working, toStepError(error, 'AUDIT')))) return;
       retryRef.current = async () => {
         const latest = sessionRef.current;
         if (!latest) return;
-        const running = { ...latest, workflow: { ...latest.workflow, status: 'running' as const, error: null } };
+        const running = resume(latest);
         commit(running);
         await finishAudit(running, draft, local);
       };
     }
-  }, [commit, getEngine]);
+  // generateAndAudit is declared below; both callbacks change together because they
+  // share the same dependencies, so the closure never goes stale.
+  }, [commit, commitActive, getEngine, isActive]);
 
   const generateAndAudit = useCallback(async (base: SessionContext, corrections: string[] = []) => {
     const attempt = base.audit.retryCount + 1;
@@ -150,27 +175,31 @@ export function useWorkflow(
       corrections.length ? `携带 ${corrections.length} 条修正指令重新生成` : '基于完整上下文生成审查草稿',
       { attempt },
     );
-    commit(working);
+    if (!commitActive(working)) return;
     let draft: SafetyDraft;
+    let local: ReturnType<typeof auditSafetyDraft>;
     try {
-      draft = await getEngine().generate(working, corrections);
+      const generated = await getEngine().generate(working, corrections);
+      if (!isActive(working.id)) return;
+      // The attempt counter is owned by the workflow, not by the model output.
+      draft = { ...generated, attempt };
       working = { ...working, draft };
       working = transition(working, 'AUDIT', 'running', '草稿已生成，开始本地规则与 AI 双重校验', {
         type: 'llm_result',
         attempt,
       });
-      commit(working);
+      commitActive(working);
+      local = auditSafetyDraft(working.input, draft);
     } catch (error) {
-      commit(failStep(working, toStepError(error, 'GENERATE')));
+      if (!commitActive(failStep(working, toStepError(error, 'GENERATE')))) return;
       retryRef.current = async () => {
         const latest = sessionRef.current;
         if (!latest) return;
-        await generateAndAudit({ ...latest, workflow: { ...latest.workflow, status: 'running', error: null } }, corrections);
+        await generateAndAudit(resume(latest), corrections);
       };
       return;
     }
 
-    const local = auditSafetyDraft(working.input, draft);
     working = addTrace(
       working,
       'rule_audit',
@@ -178,56 +207,76 @@ export function useWorkflow(
       local.passed ? '本地确定性规则校验通过' : `本地规则拦截 ${local.issues.length} 项问题`,
       { attempt },
     );
-    commit(working);
+    if (!commitActive(working)) return;
     await finishAudit(working, draft, local);
-  }, [commit, finishAudit, getEngine]);
+  }, [commitActive, finishAudit, getEngine, isActive]);
 
   const runParse = useCallback(async (base: SessionContext, mode: 'parse' | 'clarify') => {
     let working = mode === 'clarify'
       ? addTrace(base, 'llm_call', 'CLARIFY', '合并原始信息与全部历史问答，重新评估完整性')
       : addTrace(base, 'llm_call', 'PARSE', '提取试剂属性、操作条件并进行风险初筛');
-    commit(working);
+    if (!commitActive(working)) return;
+    let parsed: ParseResult;
     try {
       const engine = getEngine();
-      const parsed = mode === 'clarify' ? await engine.clarify(working) : await engine.parse(working.input);
-      working = addTrace({ ...working, parse: parsed }, 'llm_result', working.workflow.state, mode === 'clarify' ? '信息完整性重新评估完成' : '实验信息解析完成');
-      if (parsed.next_action === 'CLARIFY') {
-        working = transition(
-          working,
-          'CLARIFY',
-          'waiting_input',
-          `${mode === 'clarify' ? '仍有安全信息缺失' : '检测到安全信息盲区'}，进入第 ${working.clarificationRounds.length + 1} 轮追问`,
-        );
-        working = {
-          ...working,
-          clarificationRounds: [
-            ...working.clarificationRounds,
-            {
-              round: working.clarificationRounds.length + 1,
-              questions: parsed.missing_questions,
-              answers: [],
-              submittedAt: null,
-            },
-          ],
-        };
-        commit(working);
-        return;
-      }
-      working = transition(working, 'GENERATE', 'running', '关键信息完整，开始生成安全方案');
-      commit(working);
-      await generateAndAudit(working);
+      parsed = mode === 'clarify' ? await engine.clarify(working) : await engine.parse(working.input);
     } catch (error) {
-      const errored = failStep(working, toStepError(error, working.workflow.state));
-      commit(errored);
+      if (!commitActive(failStep(working, toStepError(error, working.workflow.state)))) return;
       retryRef.current = async () => {
         const latest = sessionRef.current;
         if (!latest) return;
-        const running = { ...latest, workflow: { ...latest.workflow, status: 'running' as const, error: null } };
+        const running = resume(latest);
         commit(running);
         await runParse(running, mode);
       };
+      return;
     }
-  }, [commit, generateAndAudit, getEngine]);
+    if (!isActive(working.id)) return;
+
+    working = addTrace({ ...working, parse: parsed }, 'llm_result', working.workflow.state, mode === 'clarify' ? '信息完整性重新评估完成' : '实验信息解析完成');
+    if (parsed.next_action === 'CLARIFY') {
+      working = transition(
+        working,
+        'CLARIFY',
+        'waiting_input',
+        `${mode === 'clarify' ? '仍有安全信息缺失' : '检测到安全信息盲区'}，进入第 ${working.clarificationRounds.length + 1} 轮追问`,
+      );
+      working = {
+        ...working,
+        clarificationRounds: [
+          ...working.clarificationRounds,
+          {
+            round: working.clarificationRounds.length + 1,
+            questions: parsed.missing_questions,
+            answers: [],
+            submittedAt: null,
+          },
+        ],
+      };
+      commitActive(working);
+      return;
+    }
+    working = addTrace(working, 'state_transition', 'GENERATE', '关键信息完整，开始生成安全方案');
+    await generateAndAudit(working);
+  }, [commit, commitActive, generateAndAudit, getEngine, isActive]);
+
+  /** Runs `task` as the owner of the workflow for session `id`. */
+  const own = useCallback(async (id: string, task: () => Promise<void>) => {
+    runningRef.current = id;
+    try {
+      await task();
+    } finally {
+      // Only release the lock if a newer session has not taken it over meanwhile.
+      if (runningRef.current === id) runningRef.current = null;
+    }
+  }, []);
+
+  const abandonCurrent = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    runningRef.current = null;
+    retryRef.current = null;
+  }, []);
 
   const start = useCallback(async (input: ExperimentInput) => {
     if (runningRef.current) return;
@@ -235,21 +284,16 @@ export function useWorkflow(
       onSettingsRequired();
       return;
     }
-    runningRef.current = true;
-    retryRef.current = null;
+    abandonCurrent();
+    abortRef.current = new AbortController();
     const initial = addTrace(createSession(input), 'user_input', 'PARSE', `开始审查「${input.name}」`);
     commit(initial);
-    try {
-      await runParse(initial, 'parse');
-    } finally {
-      runningRef.current = false;
-    }
-  }, [commit, mockMode, onSettingsRequired, runParse, settings.apiKey]);
+    await own(initial.id, () => runParse(initial, 'parse'));
+  }, [abandonCurrent, commit, mockMode, onSettingsRequired, own, runParse, settings.apiKey]);
 
   const submitClarification = useCallback(async (answers: ClarificationAnswer[]) => {
     const current = sessionRef.current;
     if (!current || current.workflow.state !== 'CLARIFY' || runningRef.current) return;
-    runningRef.current = true;
     const rounds = current.clarificationRounds.map((round, index) =>
       index === current.clarificationRounds.length - 1
         ? { ...round, answers, submittedAt: nowIso() }
@@ -258,29 +302,28 @@ export function useWorkflow(
     let next = transition({ ...current, clarificationRounds: rounds }, 'CLARIFY', 'running', '正在合并补充信息并重新评估');
     next = addTrace(next, 'clarification_submit', 'CLARIFY', `提交第 ${rounds.length} 轮补充回答`, { round: rounds.length });
     commit(next);
-    try {
-      await runParse(next, 'clarify');
-    } finally {
-      runningRef.current = false;
-    }
-  }, [commit, runParse]);
+    await own(next.id, () => runParse(next, 'clarify'));
+  }, [commit, own, runParse]);
 
   const retry = useCallback(async () => {
-    if (!sessionRef.current || sessionRef.current.workflow.status !== 'error' || runningRef.current) return;
-    runningRef.current = true;
-    try {
-      if (retryRef.current) await retryRef.current();
-    } finally {
-      runningRef.current = false;
-    }
-  }, []);
+    const current = sessionRef.current;
+    if (!current || current.workflow.status !== 'error' || runningRef.current) return;
+    const task = retryRef.current;
+    if (!task) return;
+    await own(current.id, task);
+  }, [own]);
 
   const reset = useCallback(() => {
-    runningRef.current = false;
-    retryRef.current = null;
+    abandonCurrent();
     sessionRef.current = null;
     setSession(null);
-  }, []);
+  }, [abandonCurrent]);
+
+  /** Opens a saved session (e.g. from history), cancelling whatever is running. */
+  const load = useCallback((saved: SessionContext) => {
+    abandonCurrent();
+    commit(saved);
+  }, [abandonCurrent, commit]);
 
   return {
     session,
@@ -288,7 +331,7 @@ export function useWorkflow(
     submitClarification,
     retry,
     reset,
-    commit,
+    load,
     busy: session?.workflow.status === 'running',
   };
 }

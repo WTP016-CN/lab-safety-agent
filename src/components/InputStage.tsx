@@ -164,6 +164,7 @@ function describeSuccess(input: ExperimentInput, result: PdfExtractResult): stri
   if (result.mode === 'vision' && result.visionPageCount < result.pageCount) {
     notes.push(`扫描版共 ${result.pageCount} 页，当前识别前 ${result.visionPageCount} 页`);
   }
+  if (result.warning) notes.push(result.warning);
   return `${notes.join('；')}。`;
 }
 

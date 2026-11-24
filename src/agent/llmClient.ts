@@ -66,7 +66,14 @@ export interface LlmClientOptions {
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
   onRequest?: (node: 'parse' | 'clarify' | 'generate' | 'audit') => void;
+  /** External cancellation (e.g. the user starts a new review while a request is in flight). */
+  signal?: AbortSignal;
 }
+
+const isAbortError = (error: unknown): boolean =>
+  error instanceof Error && error.name === 'AbortError';
+
+const defaultFetch: typeof fetch = (...args) => globalThis.fetch(...args);
 
 export function resolveChatCompletionsUrl(baseUrl: string): string {
   const base = baseUrl.trim().replace(/\/+$/, '');
@@ -108,6 +115,7 @@ export class LlmEngine implements AgentEngine {
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
   private readonly onRequest?: LlmClientOptions['onRequest'];
+  private readonly signal?: AbortSignal;
 
   constructor(settings: ModelSettings, options: LlmClientOptions = {}) {
     this.settings = {
@@ -116,8 +124,9 @@ export class LlmEngine implements AgentEngine {
       model: settings.model.trim(),
     };
     this.timeoutMs = options.timeoutMs ?? 75_000;
-    this.fetchImpl = options.fetchImpl ?? window.fetch.bind(window);
+    this.fetchImpl = options.fetchImpl ?? defaultFetch;
     this.onRequest = options.onRequest;
+    this.signal = options.signal;
   }
 
   async parse(input: ExperimentInput): Promise<ParseResult> {
@@ -184,8 +193,13 @@ export class LlmEngine implements AgentEngine {
   }
 
   private async request(system: string, user: string, maxTokens: number): Promise<string> {
+    if (this.signal?.aborted) {
+      throw new LlmRequestError('unknown', '请求已取消。', false);
+    }
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const cancel = () => controller.abort();
+    this.signal?.addEventListener('abort', cancel, { once: true });
 
     try {
       const response = await this.fetchImpl(resolveChatCompletionsUrl(this.settings.baseUrl), {
@@ -245,7 +259,10 @@ export class LlmEngine implements AgentEngine {
       return contentAsText(body);
     } catch (error) {
       if (error instanceof LlmRequestError) throw error;
-      if (error instanceof DOMException && error.name === 'AbortError') {
+      if (isAbortError(error)) {
+        if (this.signal?.aborted) {
+          throw new LlmRequestError('unknown', '请求已取消。', false);
+        }
         throw new LlmRequestError(
           'timeout',
           `模型请求超时（${Math.round(this.timeoutMs / 1000)} 秒），请重试本步骤。`,
@@ -268,6 +285,7 @@ export class LlmEngine implements AgentEngine {
       );
     } finally {
       clearTimeout(timer);
+      this.signal?.removeEventListener('abort', cancel);
     }
   }
 }
@@ -287,7 +305,7 @@ export async function fetchModelIds(
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 15_000);
-  const request = options.fetchImpl ?? window.fetch.bind(window);
+  const request = options.fetchImpl ?? defaultFetch;
 
   try {
     const response = await request(resolveModelsUrl(baseUrl), {
@@ -319,7 +337,7 @@ export async function fetchModelIds(
     return [...new Set(ids)].sort((a, b) => a.localeCompare(b));
   } catch (error) {
     if (error instanceof LlmRequestError) throw error;
-    if (error instanceof DOMException && error.name === 'AbortError') {
+    if (isAbortError(error)) {
       throw new LlmRequestError('timeout', '拉取模型列表超时，请重试。', true);
     }
     if (error instanceof TypeError) {

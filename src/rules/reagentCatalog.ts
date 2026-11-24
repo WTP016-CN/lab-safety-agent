@@ -200,7 +200,30 @@ export const REAGENT_CATALOG: CatalogEntry[] = [
     hazards: ['非卤有机废液', '易燃', '有毒'],
   },
   {
-    aliases: ['硫酸', 'sulfate'],
+    aliases: ['硫酸亚铁铵', '硫酸铁铵', 'ferrous ammonium sulfate', 'ammonium iron sulfate'],
+    cas: '7783-85-9',
+    tags: [],
+    hazards: ['常规滴定剂', '刺激性'],
+  },
+  {
+    aliases: ['试亚铁灵', 'ferroin'],
+    tags: [],
+    hazards: ['常规氧化还原指示剂'],
+  },
+  {
+    aliases: ['过硫酸钾', 'potassium persulfate', 'k2s2o8'],
+    cas: '7727-21-1',
+    tags: ['strong_oxidizer'],
+    hazards: ['强氧化性', '受热分解', '致敏'],
+  },
+  {
+    aliases: ['硝酸银', 'silver nitrate', 'agno3'],
+    cas: '7761-88-8',
+    tags: ['heavy_metal', 'strong_oxidizer'],
+    hazards: ['腐蚀性', '氧化性', '银盐环境危害'],
+  },
+  {
+    aliases: ['硫酸盐', 'sulfate'],
     tags: [],
     hazards: ['常规硫酸盐'],
   },
@@ -227,14 +250,73 @@ export function normalizeText(value: string): string {
   return value.toLowerCase().replace(/\s+/g, '').replace(/[（(].*?[)）]/g, '');
 }
 
+interface AliasPattern {
+  entry: CatalogEntry;
+  alias: string;
+  ascii: boolean;
+}
+
+/** Aliases sorted longest-first so that "硫酸汞" wins over "硫酸", "hclo4" over "hcl". */
+const ALIAS_PATTERNS: AliasPattern[] = REAGENT_CATALOG
+  .flatMap((entry) => entry.aliases.map((alias) => {
+    const key = alias.toLowerCase().replace(/\s+/g, ' ').trim();
+    return { entry, alias: key, ascii: /^[\x20-\x7e]+$/.test(key) };
+  }))
+  .sort((a, b) => b.alias.length - a.alias.length);
+
+/** Characters that turn a "xx酸" acid name into a salt / derivative (硫酸银, 硝酸钠, 盐酸羟胺…). */
+const ACID_SALT_SUFFIX = /[钠钾银汞铜铁亚铵钙镁锌铅钡锰铝锂镍钴镉锶铬盐根酯酐羟]/;
+/** Prefixes that denote a different acid (亚硝酸, 次氯酸, 过硫酸…). */
+const ACID_PREFIX = /[亚次过]/;
+
+function matchKey(text: string): string {
+  return text
+    .toLowerCase()
+    // Keep bracketed content ("溶于浓硫酸", "含碘化汞") — it often names extra hazards.
+    .replace(/[（()）,，、;；]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Finds catalog entries mentioned in a text. Longer aliases mask the spans they cover,
+ * ASCII aliases (formulas / English names) must sit on word boundaries, and
+ * Chinese acid names are ignored when they are part of a salt name.
+ */
+function findCatalogMatches(text: string): Array<{ entry: CatalogEntry; index: number }> {
+  const key = matchKey(text);
+  if (!key) return [];
+  const masked = new Array<boolean>(key.length).fill(false);
+  const matches: Array<{ entry: CatalogEntry; index: number }> = [];
+
+  for (const pattern of ALIAS_PATTERNS) {
+    const regex = pattern.ascii
+      ? new RegExp(`(?<![a-z0-9])${escapeRegExp(pattern.alias).replace(/ /g, '\\s*')}(?![a-z0-9])`, 'g')
+      : new RegExp(escapeRegExp(pattern.alias), 'g');
+    for (const found of key.matchAll(regex)) {
+      const start = found.index ?? 0;
+      const end = start + found[0].length;
+      if (masked.slice(start, end).some(Boolean)) continue;
+      if (!pattern.ascii && pattern.alias.endsWith('酸')) {
+        if (ACID_PREFIX.test(key[start - 1] ?? '') || ACID_SALT_SUFFIX.test(key[end] ?? '')) continue;
+      }
+      masked.fill(true, start, end);
+      matches.push({ entry: pattern.entry, index: start });
+    }
+  }
+  return matches.sort((a, b) => a.index - b.index);
+}
+
 export function inferHazardTags(text: string): HazardTag[] {
   const normalized = normalizeText(text);
   const tags = new Set<HazardTag>();
 
-  for (const entry of REAGENT_CATALOG) {
-    if (entry.aliases.some((alias) => normalized.includes(normalizeText(alias)))) {
-      entry.tags.forEach((tag) => tags.add(tag));
-    }
+  for (const { entry } of findCatalogMatches(text)) {
+    entry.tags.forEach((tag) => tags.add(tag));
   }
 
   if (/强酸|酸性废液/.test(text)) tags.add('strong_acid');
@@ -255,17 +337,12 @@ export function hasDangerousHazard(tags: HazardTag[]): boolean {
 }
 
 export function isKnownReagent(text: string): boolean {
-  const normalized = normalizeText(text);
-  return REAGENT_CATALOG.some((entry) =>
-    entry.aliases.some((alias) => normalized.includes(normalizeText(alias))),
-  );
+  return findCatalogMatches(text).length > 0;
 }
 
+/** Returns the first reagent named in the text (by position), e.g. "硫酸银（溶于浓硫酸）" → 硫酸银. */
 export function lookupCatalogEntry(text: string): CatalogEntry | undefined {
-  const normalized = normalizeText(text);
-  return REAGENT_CATALOG.find((entry) =>
-    entry.aliases.some((alias) => normalized.includes(normalizeText(alias))),
-  );
+  return findCatalogMatches(text)[0]?.entry;
 }
 
 export function getComponentTags(components: string[]): Set<HazardTag> {

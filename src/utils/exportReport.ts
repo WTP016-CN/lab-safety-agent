@@ -1,27 +1,50 @@
 import type { SessionContext } from '../agent/types';
+import { RISK_LABELS, WASTE_CATEGORY_LABELS } from '../data/labels';
 
-const riskName = { low: '低危', medium: '中危', high: '高危' } as const;
+const DESTINATION_LABELS = {
+  waste_stream: '进入废液桶',
+  reacted_or_consumed: '反应消耗',
+  not_used: '未使用',
+} as const;
 
 export function buildMarkdown(session: SessionContext): string {
   const draft = session.draft;
   if (!draft) return '';
+  const latestAudit = session.audit.history.at(-1);
+  const streamLabel = (id?: string) =>
+    draft.wasteStreams.find((stream) => stream.id === id)?.bucketLabel ?? id ?? '未指定';
   const lines: string[] = [
     `# ${session.input.name} · 实验安全审查报告`,
     '',
-    `> 风险评级：**${riskName[draft.riskLevel]}**  `,
+    `> 风险评级：**${RISK_LABELS[draft.riskLevel]}**  `,
     `> 双重校验：**${session.audit.requiresManualReview ? '需人工复核' : '已通过'}**  `,
     `> 生成时间：${new Date(session.updatedAt).toLocaleString('zh-CN')}`,
     '',
+    ...(session.audit.requiresManualReview && latestAudit?.issues.length
+      ? [
+          '## ⚠ 待人工复核问题',
+          '',
+          '已达到最大自动重写次数，以下问题仍未解决，必须由实验室安全负责人复核后方可使用本方案：',
+          '',
+          ...latestAudit.issues.map((issue) => `- ${issue}`),
+          '',
+        ]
+      : []),
     '## 实验输入',
     '',
     session.input.procedure,
     '',
     '### 拟用试剂',
     '',
-    ...session.input.reagentListText.split('\n').filter(Boolean).map((line) => `- ${line}`),
+    ...session.input.reagentListText.split(/\r?\n/).filter((line) => line.trim()).map((line) => `- ${line.trim()}`),
+    '',
+    '## 风险依据',
+    '',
+    ...draft.riskRationale.map((item) => `- ${item}`),
     '',
     '## 配伍禁忌预警',
     '',
+    ...(draft.compatibilityWarnings.length ? [] : ['- 未识别到需要特别提示的配伍组合。', '']),
     ...draft.compatibilityWarnings.flatMap((item) => [
       `### ${item.reagents.join(' + ')}`,
       '',
@@ -56,13 +79,19 @@ export function buildMarkdown(session: SessionContext): string {
     ...draft.wasteStreams.flatMap((stream) => [
       `### ${stream.bucketLabel}`,
       '',
-      `- **类别：** ${stream.category}`,
+      `- **类别：** ${WASTE_CATEGORY_LABELS[stream.category] ?? stream.category}`,
       `- **主要成分：** ${stream.mainComponents.join('、')}`,
       `- **容器：** ${stream.containerSpec}`,
       `- **储存：** ${stream.storageNotes}`,
       `- **严禁混入：** ${stream.forbiddenItems.join('；')}`,
       '',
     ]),
+    '## 试剂去向',
+    '',
+    ...draft.reagentDisposition.map((item) =>
+      `- **${item.reagentName}**：${DESTINATION_LABELS[item.destination]}${item.destination === 'waste_stream' ? `（${streamLabel(item.wasteStreamId)}）` : ''}。${item.note}`,
+    ),
+    '',
     '## 实验前安全自查',
     '',
     ...draft.checklist.map((item) => `- [ ] ${item}`),
@@ -79,9 +108,10 @@ export function downloadMarkdown(session: SessionContext): void {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = `SafeBeaker_${session.input.name.replace(/[\\/:*?"<>|]/g, '_')}.md`;
+  link.download = `SafeBeaker_${session.input.name.replace(/[\\/:*?"<>|]/g, '_').trim() || 'report'}.md`;
   document.body.appendChild(link);
   link.click();
   link.remove();
-  URL.revokeObjectURL(url);
+  // Revoking synchronously can cancel the download in some browsers (Firefox / Safari).
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

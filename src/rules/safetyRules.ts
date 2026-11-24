@@ -51,25 +51,27 @@ function issue(
   return { ruleId, severity, message, evidence, suggestion };
 }
 
+/** Keyword → hazard tag mapping for free-text "forbidden items". Every pattern is checked. */
+const FORBIDDEN_KEYWORDS: Array<[RegExp, HazardTag]> = [
+  [/汞|mercury/i, 'mercury'],
+  [/六价铬|铬酸|重铬酸|chromium/i, 'chromium_vi'],
+  [/卤代|含卤|(?<!non-?)(?:chlorinated|halogenated)/i, 'halogenated_organic'],
+  [/强酸|酸类|\bacids?\b/i, 'strong_acid'],
+  [/强碱|碱类|alkali|\bbases?\b/i, 'strong_base'],
+  [/氰化物|cyanide/i, 'cyanide'],
+  [/硫化物|sulfide/i, 'sulfide'],
+  [/氟化物|氢氟酸|fluoride|hydrofluoric/i, 'fluoride'],
+];
+
 function componentMatchesForbidden(
   component: string,
   forbiddenText: string,
 ): boolean {
-  const componentTags = inferHazardTags(component);
-  const forbiddenTags = inferHazardTags(forbiddenText);
-  const text = forbiddenText.toLowerCase();
-  if (hasAnyTag(new Set(componentTags), forbiddenTags)) return true;
-  if (/汞|mercury/.test(text)) return componentTags.includes('mercury');
-  if (/六价铬|铬酸|重铬酸|chromium/.test(text)) return componentTags.includes('chromium_vi');
-  if (/卤代|含卤|chlorinated|halogenated/.test(text)) {
-    return componentTags.includes('halogenated_organic');
-  }
-  if (/强酸|酸类|acid/.test(text)) return componentTags.includes('strong_acid');
-  if (/强碱|碱类|alkali|base/.test(text)) return componentTags.includes('strong_base');
-  if (/氰化物|cyanide/.test(text)) return componentTags.includes('cyanide');
-  if (/硫化物|sulfide/.test(text)) return componentTags.includes('sulfide');
-  if (/氟化物|氢氟酸|fluoride|hydrofluoric/.test(text)) return componentTags.includes('fluoride');
-  return false;
+  const componentTags = new Set(inferHazardTags(component));
+  if (hasAnyTag(componentTags, inferHazardTags(forbiddenText))) return true;
+  return FORBIDDEN_KEYWORDS.some(([pattern, tag]) =>
+    pattern.test(forbiddenText) && componentTags.has(tag),
+  );
 }
 
 function checkWasteStream(stream: WasteStream): LocalRuleIssue[] {
@@ -173,7 +175,10 @@ function normalizedReagentMatch(reagent: string, destination: string): boolean {
   const reagentKey = normalizeText(reagent);
   const destinationKey = normalizeText(destination);
   if (reagentKey.length < 2) return false;
-  return destinationKey.includes(reagentKey) || reagentKey.includes(destinationKey);
+  // Guard the reverse direction: an empty or one-character destination ("", "酸")
+  // would otherwise "match" every reagent and hide a missing disposition.
+  return destinationKey.includes(reagentKey)
+    || (destinationKey.length >= 2 && reagentKey.includes(destinationKey));
 }
 
 /**
@@ -230,7 +235,7 @@ export function auditSafetyDraft(
       issues.push(issue(
         'SAFE-011',
         `试剂「${reagent.name}」未被本地目录识别，无法自动确认其危险属性与专项收集要求。`,
-        [input.reagentListText],
+        [reagent.name],
         '核对包装标签和 SDS 后人工确认，并将该试剂作为残余风险列入复核记录。',
         'warning',
       ));

@@ -208,6 +208,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .manual-review { display: flex; gap: 10px; background: #fffbeb; border: 1px solid #fde68a; color: #a16207; border-radius: 10px; padding: 15px; }
 .manual-review strong { font-size: 12px; }
 .manual-review p { font-size: 10px; margin: 5px 0 0; }
+.manual-review ul { font-size: 10px; line-height: 1.6; margin: 6px 0 0; padding-left: 16px; }
 .report-summary { display: grid; grid-template-columns: 2fr .8fr .8fr 1.4fr; border: 1px solid var(--line); border-radius: 12px; background: white; padding: 17px; }
 .report-summary > div { padding: 0 18px; border-right: 1px solid #e4ece8; }
 .report-summary > div:first-child { padding-left: 5px; }

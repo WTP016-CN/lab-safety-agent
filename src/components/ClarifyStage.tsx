@@ -1,13 +1,22 @@
 import { ArrowRight, History, Info, MessageCircleQuestion, ShieldAlert } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import type { ClarificationAnswer, SessionContext } from '../agent/types';
+import type { ClarificationAnswer, ClarificationRound, SessionContext } from '../agent/types';
 import { ErrorPanel } from './ErrorPanel';
 import { RiskBadge } from './ui';
 
+/** Restores already-submitted answers so a failed re-evaluation does not wipe the form. */
+const initialAnswers = (round: ClarificationRound): ClarificationAnswer[] =>
+  round.questions.map((question) => {
+    const saved = round.answers.find((answer) => answer.questionId === question.id);
+    return { questionId: question.id, value: saved?.value ?? [], supplement: saved?.supplement ?? '' };
+  });
+
 export function ClarifyStage({ session, onSubmit, onRetry }: { session: SessionContext; onSubmit: (answers: ClarificationAnswer[]) => void; onRetry: () => void }) {
   const round = session.clarificationRounds.at(-1)!;
-  const [answers, setAnswers] = useState<ClarificationAnswer[]>([]);
-  useEffect(() => { setAnswers(round.questions.map((question) => ({ questionId: question.id, value: [], supplement: '' }))); }, [round]);
+  const [answers, setAnswers] = useState<ClarificationAnswer[]>(() => initialAnswers(round));
+  // Reset only when a new round arrives (not every time the round object is re-created).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { setAnswers(initialAnswers(round)); }, [session.id, round.round]);
   const busy = session.workflow.status === 'running';
   const complete = round.questions.every((question) => !question.required || answers.find((answer) => answer.questionId === question.id)?.value.length);
 
@@ -18,8 +27,8 @@ export function ClarifyStage({ session, onSubmit, onRetry }: { session: SessionC
     <form className="card question-card" onSubmit={(event) => { event.preventDefault(); if (complete) onSubmit(answers); }}>
       {round.questions.map((question, index) => {
         const answer = answers.find((item) => item.questionId === question.id);
-        const update = (next: Partial<ClarificationAnswer>) => setAnswers(answers.map((item) => item.questionId === question.id ? { ...item, ...next } : item));
-        return <fieldset className="question" key={question.id}><legend><span>{index + 1}</span>{question.prompt}<b>*</b></legend><p className="rationale">{question.rationale}</p><div className="option-grid">{question.options.map((option) => <label className={`option ${answer?.value.includes(option.value) ? 'checked' : ''}`} key={option.value}><input type={question.control === 'single' ? 'radio' : 'checkbox'} name={`${round.round}-${question.id}`} checked={answer?.value.includes(option.value) ?? false} onChange={() => update({ value: question.control === 'single' ? [option.value] : answer?.value.includes(option.value) ? answer.value.filter((value) => value !== option.value) : [...(answer?.value ?? []), option.value] })} /><span>{option.label}</span></label>)}</div>{question.allowSupplement && <input className="supplement" value={answer?.supplement ?? ''} onChange={(e) => update({ supplement: e.target.value })} placeholder="补充说明（可选）：浓度、体积、设备型号等" />}</fieldset>;
+        const update = (next: Partial<ClarificationAnswer>) => setAnswers((current) => current.map((item) => item.questionId === question.id ? { ...item, ...next } : item));
+        return <fieldset className="question" key={question.id}><legend><span>{index + 1}</span>{question.prompt}{question.required && <b>*</b>}</legend><p className="rationale">{question.rationale}</p><div className="option-grid">{question.options.map((option) => <label className={`option ${answer?.value.includes(option.value) ? 'checked' : ''}`} key={option.value}><input type={question.control === 'single' ? 'radio' : 'checkbox'} name={`${round.round}-${question.id}`} checked={answer?.value.includes(option.value) ?? false} onChange={() => update({ value: question.control === 'single' ? [option.value] : answer?.value.includes(option.value) ? answer.value.filter((value) => value !== option.value) : [...(answer?.value ?? []), option.value] })} /><span>{option.label}</span></label>)}</div>{question.allowSupplement && <input className="supplement" value={answer?.supplement ?? ''} onChange={(e) => update({ supplement: e.target.value })} placeholder="补充说明（可选）：浓度、体积、设备型号等" />}</fieldset>;
       })}
       {session.workflow.error && <ErrorPanel error={session.workflow.error} onRetry={onRetry} />}
       <div className="form-footer"><span><ShieldAlert size={16} /> 不确定时请选择“不确定”，不要猜测实验条件</span><button className="primary" disabled={!complete || busy}>{busy ? <><span className="spinner" /> 正在重新评估…</> : <>提交并继续 <ArrowRight size={17} /></>}</button></div>

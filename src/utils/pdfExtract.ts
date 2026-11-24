@@ -10,6 +10,8 @@ export interface PdfExtractResult {
   pageCount: number;
   visionPageCount: number;
   mode: PdfExtractMode;
+  /** Non-fatal problem (e.g. some scanned pages could not be recognised). */
+  warning?: string;
 }
 
 export interface PdfExtractOptions {
@@ -102,21 +104,28 @@ export async function extractPdfContent(
             .map(({ page }) => page);
 
       let visionSections: VisionSections | null = null;
+      let visionWarning: string | undefined;
       if (visionPageNumbers.length > 0) {
-        const images: string[] = [];
-        for (let index = 0; index < visionPageNumbers.length; index += 1) {
-          onProgress?.(`正在渲染关键页面（${index + 1}/${visionPageNumbers.length}）…`);
-          const page = await pdf.getPage(visionPageNumbers[index]);
-          try {
-            images.push(await renderPageToImage(page));
-          } finally {
-            page.cleanup();
+        try {
+          const images: string[] = [];
+          for (let index = 0; index < visionPageNumbers.length; index += 1) {
+            onProgress?.(`正在渲染关键页面（${index + 1}/${visionPageNumbers.length}）…`);
+            const page = await pdf.getPage(visionPageNumbers[index]);
+            try {
+              images.push(await renderPageToImage(page));
+            } finally {
+              page.cleanup();
+            }
           }
+          onProgress?.('正在调用视觉模型识别页面文字…');
+          visionSections = parseVisionText(
+            await requestVisionText(settings, images, timeoutMs),
+          );
+        } catch (error) {
+          // Scanned PDFs have nothing else to fall back on; mixed PDFs keep their text layer.
+          if (scanned) throw error;
+          visionWarning = error instanceof Error ? error.message : String(error);
         }
-        onProgress?.('正在调用视觉模型识别页面文字…');
-        visionSections = parseVisionText(
-          await requestVisionText(settings, images, timeoutMs),
-        );
       }
 
       if (scanned) {
@@ -140,6 +149,7 @@ export async function extractPdfContent(
           pageCount: pdf.numPages,
           visionPageCount: 0,
           mode: 'text',
+          ...(visionWarning ? { warning: `${visionPageNumbers.length} 页扫描页未能识别：${visionWarning}` } : {}),
         };
       }
 

@@ -67,7 +67,7 @@ ${sharedRules}
 1. 试剂配伍禁忌：列出不能混放、混倒或同时操作的组合及反应危害，不虚构未存在的组合。
 2. PPE 与通风：按实际危险选择护目镜、面屏、耐酸碱手套、防化服、通风橱等。
 3. 分步 SOP 与应急：覆盖使用、加热/回流、冷却、转移、清理；包含酸液溅落、皮肤接触及重金属/含汞泄漏处置。
-4. 危废收集：按实验室标准细分并给出桶标签、主要成分、危险特性、严禁混入项、容器和暂存要求。含 Six价铬、汞、氢氟酸/氟化物必须专项收集，不得与普通强酸或有机废液混桶。
+4. 危废收集：按实验室标准细分并给出桶标签、主要成分、危险特性、严禁混入项、容器和暂存要求。含六价铬、汞、氢氟酸/氟化物必须专项收集，不得与普通强酸或有机废液混桶。
 5. 试剂去向：逐一说明每种试剂是被消耗、残留进入哪个废液桶，还是未使用；wasteStreamId 必须引用实际存在且语义匹配的桶。
 
 若提供了修正意见，必须逐条修正，不得只改措辞；仍须输出完整方案。
@@ -119,7 +119,7 @@ export function buildGenerateUserPrompt(
     parse: context.parse,
     clarificationRounds: context.clarificationRounds,
     correctionIssues,
-    attempt: context.draft ? context.draft.attempt + 1 : 1,
+    attempt: context.audit.retryCount + 1,
   };
   return `请生成完整方案并返回严格 JSON：\n${JSON.stringify(payload, null, 2)}`;
 }
