@@ -9,7 +9,7 @@ npm install
 npm run dev
 ```
 
-打开 `http://localhost:5173`。无 API Key 时默认开启离线演示；右上角可配置 DeepSeek、OpenAI 或硅基流动兼容接口。DeepSeek 默认使用完整端点 `https://api.deepseek.com/chat/completions`，填写 API Key 后设置弹窗会自动拉取并建议可用模型。
+打开 `http://localhost:5173`。无 API Key 时默认开启离线演示；右上角可配置 DeepSeek 或任意第三方 API 链接（接口地址、模型名和 API Key 均需自行填写，且地址须完整填到 `/chat/completions`）。DeepSeek 默认端点为 `https://api.deepseek.com/chat/completions`，填写 API Key 后设置弹窗会自动拉取可用模型。
 
 ```powershell
 npm test

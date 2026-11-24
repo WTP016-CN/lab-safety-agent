@@ -112,24 +112,32 @@ const defaultFetch: typeof fetch = (...args) => globalThis.fetch(...args);
 /** Models known to reject non-default `temperature` values (e.g. OpenAI o-series / gpt-5). */
 const FIXED_TEMPERATURE_MODEL = /^(?:o1|o3|o4)(?:$|[-_])|^gpt-5/i;
 
+export function isValidChatCompletionsUrl(baseUrl: string): boolean {
+  const base = baseUrl.trim().replace(/\/+$/, '');
+  if (!base) return false;
+  try {
+    const parsed = new URL(base);
+    return (parsed.protocol === 'http:' || parsed.protocol === 'https:')
+      && Boolean(parsed.hostname)
+      && /\/chat\/completions$/i.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+}
+
 export function resolveChatCompletionsUrl(baseUrl: string): string {
   const base = baseUrl.trim().replace(/\/+$/, '');
   if (!base) {
-    throw new LlmRequestError('auth', '请先配置 API Base URL。', false);
+    throw new LlmRequestError('auth', '请先填写 API 地址（须填写到 /chat/completions）。', false);
   }
-  if (/\/(?:chat\/completions|responses|messages)$/i.test(base)) return base;
-  return `${base}/chat/completions`;
+  if (!isValidChatCompletionsUrl(base)) {
+    throw new LlmRequestError('auth', 'API 地址格式有误，须为以 /chat/completions 结尾的完整 http(s) 地址。', false);
+  }
+  return base;
 }
 
 export function resolveModelsUrl(baseUrl: string): string {
-  const base = baseUrl.trim().replace(/\/+$/, '');
-  if (!base) {
-    throw new LlmRequestError('auth', '请先填写 API 地址。', false);
-  }
-  if (/\/(?:chat\/completions|responses|messages)$/i.test(base)) {
-    return base.replace(/\/(?:chat\/completions|responses|messages)$/i, '/models');
-  }
-  return `${base}/models`;
+  return resolveChatCompletionsUrl(baseUrl).replace(/\/chat\/completions$/i, '/models');
 }
 
 function partsAsText(parts: ContentPart[]): string {

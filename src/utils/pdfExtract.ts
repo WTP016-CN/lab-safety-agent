@@ -373,8 +373,10 @@ async function requestVisionText(
 function resolveChatCompletionsUrl(baseUrl: string): string {
   try {
     return resolveEndpoint(baseUrl);
-  } catch {
-    throw new PdfImportError('请先在模型设置中填写 Base URL。');
+  } catch (error) {
+    throw new PdfImportError(
+      error instanceof Error ? error.message : '请先在模型设置中填写完整 API 地址（须填写到 /chat/completions）。',
+    );
   }
 }
 

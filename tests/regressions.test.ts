@@ -107,7 +107,7 @@ describe('llm client cancellation', () => {
     const fetchImpl = vi.fn((_url: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_, reject) => {
       init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
     }));
-    const engine = new LlmEngine({ baseUrl: 'https://x/v1', apiKey: 'k', model: 'm' }, { fetchImpl: fetchImpl as typeof fetch, signal: controller.signal });
+    const engine = new LlmEngine({ baseUrl: 'https://x/v1/chat/completions', apiKey: 'k', model: 'm' }, { fetchImpl: fetchImpl as typeof fetch, signal: controller.signal });
     const pending = engine.audit(createSession({ name: 'n', procedure: 'p', reagentListText: 'r' }), makeDraft());
     controller.abort();
     await expect(pending).rejects.toMatchObject({ retryable: false });

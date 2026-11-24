@@ -306,7 +306,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .icon-button { border: 0; background: none; color: #6b8076; padding: 7px; display: grid; place-items: center; border-radius: 6px; }
 .icon-button:hover { background: #edf3ef; }
 .modal-header .icon-button { margin-left: auto; }
-.provider-tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }
+.provider-tabs { display: grid; grid-template-columns: repeat(2, 1fr); gap: 7px; }
 .provider-tabs button { border: 1px solid #dce6e1; background: #fafcfb; color: #64796f; padding: 9px; border-radius: 7px; font-size: 11px; }
 .provider-tabs button.selected { border-color: #80b9a7; color: var(--teal); background: #eff8f4; }
 .key-input { display: flex; align-items: center; gap: 8px; border: 1px solid #d7e1dc; background: #fbfcfb; border-radius: 8px; padding: 0 10px; color: #84958c; }

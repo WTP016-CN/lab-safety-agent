@@ -4,7 +4,9 @@ import {
   LlmRequestError,
   extractCompletionText,
   fetchModelIds,
+  isValidChatCompletionsUrl,
   parseSseTranscript,
+  resolveChatCompletionsUrl,
   resolveModelsUrl,
 } from '../src/agent/llmClient';
 import { cleanJsonText, parseAgentJson, validateSafetyDraft } from '../src/agent/schemas';
@@ -37,14 +39,19 @@ const sampleDraft = {
 };
 
 describe('model endpoint helpers', () => {
-  it('maps full chat completion endpoints to the models endpoint', () => {
+  it('maps full chat completion endpoints to the models endpoint and rejects incomplete URLs', () => {
+    expect(isValidChatCompletionsUrl('https://api.deepseek.com/chat/completions')).toBe(true);
+    expect(isValidChatCompletionsUrl('https://api.example.com/v1')).toBe(false);
+    expect(resolveChatCompletionsUrl('https://api.example.com/v1/chat/completions/')).toBe('https://api.example.com/v1/chat/completions');
     expect(resolveModelsUrl('https://api.deepseek.com/chat/completions')).toBe('https://api.deepseek.com/models');
-    expect(resolveModelsUrl('https://api.deepseek.com/v1')).toBe('https://api.deepseek.com/v1/models');
+    expect(resolveModelsUrl('https://api.example.com/v1/chat/completions')).toBe('https://api.example.com/v1/models');
+    expect(() => resolveChatCompletionsUrl('https://api.example.com/v1')).toThrow(LlmRequestError);
+    expect(() => resolveModelsUrl('https://api.example.com/v1')).toThrow(LlmRequestError);
   });
 
   it('extracts sorted unique model ids', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: [{ id: 'deepseek-v4-pro' }, { id: 'deepseek-flash' }, { id: 'deepseek-flash' }] })));
-    const models = await fetchModelIds({ baseUrl: 'https://api.example.com/v1', apiKey: 'sk-test' }, { fetchImpl });
+    const models = await fetchModelIds({ baseUrl: 'https://api.example.com/v1/chat/completions', apiKey: 'sk-test' }, { fetchImpl });
     expect(models).toEqual(['deepseek-flash', 'deepseek-v4-pro']);
     expect(fetchImpl).toHaveBeenCalledWith('https://api.example.com/v1/models', expect.objectContaining({ headers: { Authorization: 'Bearer sk-test' } }));
   });
@@ -101,7 +108,7 @@ describe('real-world LLM compatibility', () => {
     });
 
     const engine = new LlmEngine(
-      { baseUrl: 'https://relay.example.com/v1', apiKey: 'sk-test', model: 'deepseek-flash' },
+      { baseUrl: 'https://relay.example.com/v1/chat/completions', apiKey: 'sk-test', model: 'deepseek-flash' },
       { fetchImpl: fetchImpl as typeof fetch },
     );
     const res = await engine.audit(createSession({ name: 'n', procedure: 'p', reagentListText: 'r' }), sampleDraft);
@@ -114,7 +121,7 @@ describe('real-world LLM compatibility', () => {
       new Response(JSON.stringify({ error: { message: '模型 deepseek-unknown 不存在' } }), { status: 200 }),
     );
     const engine = new LlmEngine(
-      { baseUrl: 'https://relay.example.com/v1', apiKey: 'sk-test', model: 'deepseek-unknown' },
+      { baseUrl: 'https://relay.example.com/v1/chat/completions', apiKey: 'sk-test', model: 'deepseek-unknown' },
       { fetchImpl },
     );
     await expect(
@@ -125,7 +132,7 @@ describe('real-world LLM compatibility', () => {
   it('attaches diagnostic detail when a response genuinely has no text', async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ status: 'ok' }), { status: 200 }));
     const engine = new LlmEngine(
-      { baseUrl: 'https://relay.example.com/v1', apiKey: 'sk-test', model: 'deepseek-flash' },
+      { baseUrl: 'https://relay.example.com/v1/chat/completions', apiKey: 'sk-test', model: 'deepseek-flash' },
       { fetchImpl },
     );
     try {
